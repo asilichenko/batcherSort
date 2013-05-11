@@ -5,10 +5,10 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 public class ParallelBatcher {
     private int getStartSize(int N) {
@@ -17,14 +17,16 @@ public class ParallelBatcher {
     }
 
     class Task<T extends Comparable<T>> implements Runnable {
-        private List<T> arr;
-        private int d;
-        private int p;
-        private int r;
-        private int start;
-        private int end;
+        private final List<T> arr;
+        private final int d;
+        private final int p;
+        private final int r;
+        private final int start;
+        private final int end;
+        private final CountDownLatch doneSignal;
 
-        public Task(List<T> arr, int p, int d, int r, int start, int end) {
+        public Task(CountDownLatch doneSignal, List<T> arr, int p, int d, int r, int start, int end) {
+            this.doneSignal = doneSignal;
             this.arr = arr;
             this.p = p;
             this.d = d;
@@ -40,6 +42,7 @@ public class ParallelBatcher {
                     if (arr.get(i).compareTo(arr.get(i + d)) > 0) Collections.swap(arr, i, i + d);
                 }
             }
+            doneSignal.countDown();
         }
     }
 
@@ -52,31 +55,26 @@ public class ParallelBatcher {
                  q >= mask;
                  dist = q - mask, q /= 2, offset = mask) {
 
-                List<Future> futures = goOverArray(retval, nThreads, threadPool, mask, offset, dist);
-
-                // wait for all threads finish their task
-                for (Future future : futures) {
-                    future.get();
-                }
+                goOverArray(retval, nThreads, threadPool, mask, offset, dist);
             }
         }
         threadPool.shutdown();
         return retval;
     }
 
-    private <T extends Comparable<T>> List<Future> goOverArray(List<T> arr, int nThreads, ExecutorService service, int p, int r, int d) {
+    private <T extends Comparable<T>> void goOverArray(List<T> arr, int nThreads, ExecutorService service, int p, int r, int d) throws InterruptedException {
         int n = arr.size() - d;
         int start = 0;
         int end;
-        List<Future> futures = new ArrayList<Future>();
+        CountDownLatch doneSignal = new CountDownLatch(nThreads);
         for (int i = nThreads; i > 0; i--) {
             int size = n / i;
             n -= size;
 
             end = start + size;
-            futures.add(service.submit(new Task<T>(arr, p, d, r, start, end)));
+            service.submit(new Task<T>(doneSignal, arr, p, d, r, start, end));
             start = end;
         }
-        return futures;
+        doneSignal.await();
     }
 }
